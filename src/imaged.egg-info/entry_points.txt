@@ -1,0 +1,2 @@
+[console_scripts]
+imaged = imaged.ui.main:main

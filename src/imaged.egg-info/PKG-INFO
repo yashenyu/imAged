@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: imaged
+Version: 0.1.0
+Requires-Python: >=3.7
+Requires-Dist: PySide6
+Requires-Dist: Pillow
+Requires-Dist: numpy
+Requires-Dist: qoi
+Requires-Dist: ntplib
+Dynamic: requires-dist
+Dynamic: requires-python

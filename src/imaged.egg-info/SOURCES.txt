@@ -1,0 +1,15 @@
+README.md
+setup.py
+resources/qml/MainView.qml
+src/imaged/__init__.py
+src/imaged.egg-info/PKG-INFO
+src/imaged.egg-info/SOURCES.txt
+src/imaged.egg-info/dependency_links.txt
+src/imaged.egg-info/entry_points.txt
+src/imaged.egg-info/requires.txt
+src/imaged.egg-info/top_level.txt
+src/imaged/core/__init__.py
+src/imaged/core/api.py
+src/imaged/core/encoder.py
+src/imaged/ui/__init__.py
+src/imaged/ui/main.py
