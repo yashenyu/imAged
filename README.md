@@ -1,73 +1,114 @@
-# ImAged Viewer
+# Imaged Project
 
-A Qt-based viewer for ImAged (.ttl) files, which are time-limited image files.
+A secure image processing and management system with encryption capabilities.
+
+## Overview
+
+Imaged is a Python-based application that provides secure image processing, conversion, and management features. The project includes a QML-based user interface and implements various security measures for handling sensitive image data.
 
 ## Features
 
-- View ImAged (.ttl) files
-- Automatic expiration checking
-- NTP-based time verification
-- Modern Material Design UI
-- Support for QOI image format
+- Image conversion and processing
+- Secure encryption/decryption of images
+- Configuration management
+- Logging system
+- QML-based user interface
+- NTP server synchronization
+
+## Project Structure
+
+```
+imaged-proj/
+├── src/                    # Source code directory
+│   ├── main.py            # Main application entry point
+│   ├── python_api.py      # Python API implementation
+│   ├── converter.py       # Image conversion utilities
+│   ├── crypto.py          # Encryption/decryption functionality
+│   └── config.py          # Configuration management
+├── qml/                   # QML UI files
+├── logs/                  # Application logs
+└── config.json           # Application configuration
+```
+
+## Requirements
+
+- Python 3.8 or higher
+- PyQt5
+- Pillow (PIL)
+- cryptography
+- ntplib
+- Other dependencies listed in requirements.txt
 
 ## Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/im-aged-proj.git
-cd im-aged-proj
+git clone [repository-url]
+cd imaged-proj
 ```
 
-2. Create and activate a virtual environment:
+2. Create a virtual environment (recommended):
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. Install the package:
+3. Install dependencies:
 ```bash
-pip install -e .
+pip install -r requirements.txt
 ```
+
+## Configuration
+
+The application can be configured through `config.json`:
+
+```json
+{
+  "default_ttl_hours": 1,
+  "ntp_server": "pool.ntp.org",
+  "output_dir": ""
+}
+```
+
+- `default_ttl_hours`: Default time-to-live for processed images
+- `ntp_server`: NTP server for time synchronization
+- `output_dir`: Directory for output files
 
 ## Usage
 
-Run the viewer:
+1. Start the application:
 ```bash
-imaged
+python src/main.py
 ```
 
-Or run directly with Python:
-```bash
-python src/imaged/ui/main.py
-```
+2. Use the QML interface to:
+   - Process images
+   - Convert image formats
+   - Encrypt/decrypt images
+   - Manage configurations
 
-## Development
+## Logging
 
-The project structure is organized as follows:
+Logs are stored in the `logs/` directory. The main log file is `imaged.log`.
 
-```
-im-aged-proj/
-├── src/
-│   └── imaged/
-│       ├── core/
-│       │   ├── __init__.py
-│       │   ├── api.py
-│       │   └── encoder.py
-│       ├── ui/
-│       │   ├── __init__.py
-│       │   └── main.py
-│       └── __init__.py
-├── resources/
-│   ├── qml/
-│   │   └── MainView.qml
-│   └── icons/
-├── docs/
-│   └── FORMAT.md
-├── tests/
-├── setup.py
-└── README.md
-```
+## Security
+
+- All sensitive operations use secure encryption
+- Time-based security measures with NTP synchronization
+- Secure file handling and cleanup
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
-MIT License 
+[Specify your license here]
+
+## Support
+
+For support, please [specify contact information or support channels] 

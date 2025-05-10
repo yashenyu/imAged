@@ -1,5 +1,0 @@
-PySide6
-Pillow
-numpy
-qoi
-ntplib
