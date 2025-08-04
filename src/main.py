@@ -3,8 +3,8 @@ import os
 import logging
 from pathlib import Path
 from PySide6.QtWidgets import QApplication
-from PySide6.QtQml     import QQmlApplicationEngine
-from python_api        import PythonAPI
+from PySide6.QtQml import QQmlApplicationEngine
+from ui_controller import UIController
 
 # ─── Setup Logging ─────────────────────────────────────────────────────────────
 root = Path(__file__).parent.parent
@@ -27,8 +27,9 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     engine = QQmlApplicationEngine()
 
-    api = PythonAPI()
-    engine.rootContext().setContextProperty("pythonApi", api)
+    # Use the new UIController instead of PythonAPI
+    controller = UIController()
+    engine.rootContext().setContextProperty("pythonApi", controller)
 
     qml_path = os.path.normpath(
         os.path.join(Path(__file__).parent, os.pardir, "qml", "main.qml")

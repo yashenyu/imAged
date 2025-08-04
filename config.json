@@ -1,5 +1,5 @@
 {
-  "default_ttl_hours": 1,
-  "ntp_server": "pool.ntp.org",
-  "output_dir": ""
+  "default_ttl_hours": 2,
+  "ntp_server": "test.ntp.org",
+  "output_dir": "/tmp/test"
 }
