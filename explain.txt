@@ -1,0 +1,101 @@
+### What you’re seeing in the inspector
+
+- The view is split into two synchronized panes:
+  - Left pane: the source side (original image bytes and raw TTL file bytes).
+  - Right pane: the parsed TTL layout and the recovered plaintext (QOI) during open.
+- Each section shows:
+  - A label and a one-line description.
+  - The byte length and the absolute offset within the file (for TTL segments).
+  - A hex dump (first 512 bytes) with ASCII on the right.
+
+### TTL file format (right pane, build/open)
+
+Order and sizes:
+- MAGIC (6 bytes): file marker `IMAGED`.
+- salt (16 bytes): random salt; used to derive per-file keys with HKDF.
+- nonce_hdr (12 bytes): random AES‑GCM nonce for authenticating the header.
+- header (8 bytes): expiry timestamp, big‑endian unsigned 64‑bit (Unix seconds).
+- tag_hdr (16 bytes): AES‑GCM tag authenticating the header (see “Header auth”).
+- nonce_body (12 bytes): random AES‑GCM nonce for the body (the image).
+- tag_body (16 bytes): AES‑GCM tag for the body (QOI).
+- ciphertext_body (N bytes): encrypted QOI bytes. Length equals the QOI length.
+
+Offsets increase as each segment is appended; the inspector prints offset and length for every segment so you can correlate exactly where each piece lives in the file.
+
+### Build stages (left vs right)
+
+- Left pane:
+  - original: raw bytes of the source file you selected (e.g., PNG/JPEG).
+  - qoi: the same image encoded to QOI (lossless RGBA), plaintext before encryption.
+
+- Right pane (constructed TTL layout):
+  - MAGIC to ciphertext_body as listed above.
+  - expiry_ts: the decoded human‑readable timestamp from the 8‑byte header.
+  - tag_hdr: 16‑byte AES‑GCM tag that authenticates the header (see below).
+  - tag_body + ciphertext_body: integrity‑protected, bound to the header via AAD.
+
+### Open stages (left vs right)
+
+- Left pane:
+  - file_bytes: the entire TTL file as read from disk.
+
+- Right pane (parsed and verified):
+  - The same segments (MAGIC → ciphertext_body) parsed from the file.
+  - expiry_ts: decoded from the header.
+  - qoi: decrypted plaintext QOI bytes recovered after verifying header and body.
+
+### Cryptography details (how each piece is produced)
+
+- Key derivation (HKDF):
+  - Inputs: MASTER_KEY (secret) and per‑file random salt (16 bytes).
+  - Derived keys:
+    - key_hdr = HKDF(SHA‑256, MASTER_KEY, salt, info="ImAged HDR") for header auth.
+    - cek     = HKDF(SHA‑256, MASTER_KEY, salt, info="ImAged CEK") for body AEAD.
+
+- Header authentication:
+  - header = 8‑byte big‑endian expiry_ts (plaintext, not encrypted).
+  - tag_hdr = AES‑GCM(key_hdr, nonce_hdr)
+    - Plaintext = empty
+    - Associated Data (AAD) = header
+    - We store only the 16‑byte tag (GCM’s authentication tag).
+
+- Body encryption (QOI):
+  - ct_body||tag_body = AES‑GCM(cek, nonce_body)
+    - Plaintext = QOI bytes (the image data)
+    - AAD = header (binds body to the header)
+  - Stored as tag_body (16) followed by ciphertext_body (len = QOI length).
+
+- Early reject logic:
+  - Verify tag_hdr with AES‑GCM using AAD = header and empty plaintext to check the header before touching the body.
+  - If the header authenticates, parse expiry and reject if expired.
+  - Only then decrypt the body with AAD = header. Any tampering changes tag_body and decrypt fails.
+
+- Sizes you’ll recognize:
+  - nonce_hdr/nonce_body: 12 bytes (standard GCM nonce).
+  - tag_hdr/tag_body: 16 bytes (GCM’s auth tag).
+  - header: 8 bytes (big‑endian uint64).
+  - salt: 16 bytes (HKDF salt).
+
+### QOI end‑to‑end
+
+- TTL stores QOI bytes as the encrypted body.
+- On open, we decrypt and return raw QOI bytes. The UI decodes QOI locally (no PNG re‑encoding), so the left/right views will show:
+  - Left: original source bytes vs. full TTL file bytes.
+  - Right: QOI plaintext (build: before encryption; open: after decryption).
+
+### How to read the hex dumps
+
+- Left column: offset in the file or buffer (hex).
+- Middle: hex bytes (grouped for readability).
+- Right: ASCII view (non‑printables as “.”).
+- Each section header shows “len=…” and “offset=…”, so you can locate and compare boundaries. For example:
+  - header at offset 0x001A has len=8; its decoded expiry_ts is printed just below.
+  - tag_hdr immediately follows header and is 16 bytes (GCM tag).
+
+### Why the header is plaintext (and still safe)
+
+- The header (expiry_ts) is not encrypted; it’s authenticated by tag_hdr.
+- Body uses the header as AAD, so header and body are locked together; neither can be swapped without detection.
+- This allows:
+  - Early rejection of expired files before body decryption.
+  - Minimal exposure: only an 8‑byte timestamp is visible; image data remains confidential.

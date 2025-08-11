@@ -55,3 +55,12 @@ def encrypt_data(cek: bytes, plaintext: bytes) -> tuple[bytes, bytes, bytes]:
     ct_and_tag = aesgcm.encrypt(nonce, plaintext, None)
     logging.debug("Encrypted %d bytes payload", len(plaintext))
     return nonce, ct_and_tag[:-16], ct_and_tag[-16:]
+
+def derive_subkey(salt: bytes, info: bytes, length: int = 32) -> bytes:
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=length,
+        salt=salt,
+        info=info,
+    )
+    return hkdf.derive(MASTER_KEY)

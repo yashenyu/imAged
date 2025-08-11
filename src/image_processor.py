@@ -2,6 +2,7 @@ import qoi
 import numpy as np
 from PIL import Image
 import logging
+import io
 
 def encode_image_to_qoi(image_path: str) -> bytes:
     """Convert image to QOI format."""
@@ -14,10 +15,11 @@ def decode_qoi_to_image(qoi_data: bytes) -> Image.Image:
     arr = qoi.decode(qoi_data)
     return Image.fromarray(arr, mode="RGBA")
 
-def save_image_to_temp(image: Image.Image, suffix: str = ".png") -> str:
-    """Save image to temporary file and return path."""
-    import tempfile
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
-    image.save(tmp.name)
-    logging.debug("Saved image to temp file: %s", tmp.name)
-    return tmp.name
+def convert_image_to_bytes(image: Image.Image, format: str = "PNG") -> bytes:
+    """Convert PIL Image to bytes in memory."""
+    buffer = io.BytesIO()
+    image.save(buffer, format=format)
+    image_bytes = buffer.getvalue()
+    buffer.close()
+    logging.debug("Converted image to %d bytes in memory", len(image_bytes))
+    return image_bytes

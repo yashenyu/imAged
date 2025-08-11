@@ -3,10 +3,10 @@ import struct
 import logging
 from config import load_config
 
-def fetch_ntp_time(timeout: int = 5) -> float | None:
+def fetch_ntp_time(timeout: int = 10) -> float | None:
     """Fetch current time from NTP server with fallback to local time."""
     cfg = load_config()
-    server = cfg.get("ntp_server", "pool.ntp.org")
+    server = cfg.get("ntp_server", "time.google.com")
     try:
         addr = (server, 123)
         msg = b"\x1b" + 47 * b"\0"

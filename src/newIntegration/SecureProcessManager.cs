@@ -20,6 +20,9 @@ namespace ImAged.Services
 
         public byte[] SessionKey => _sessionKey;
 
+        private const int MaxMetaBase64Chars = 1 * 1024 * 1024;      // 1 MB line cap for metadata
+        private const int MaxPayloadBase64Chars = 40 * 1024 * 1024;  // 40 MB line cap for payload
+
         public async Task InitializeAsync()
         {
             if (_isInitialized) return;
@@ -69,31 +72,35 @@ namespace ImAged.Services
 
         private async Task EstablishSecureChannelAsync()
         {
-            // Generate session key
+            // 1. Read Python public key (base64 PEM)
+            string publicKeyBase64 = await _outputStream.ReadLineAsync();
+            if (string.IsNullOrEmpty(publicKeyBase64))
+                throw new SecurityException("No public key received from Python backend");
+            byte[] publicKeyPem = Convert.FromBase64String(publicKeyBase64);
+
+            // 2. Load public key
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(Encoding.UTF8.GetString(publicKeyPem));
+
+            // 3. Generate session key
             _sessionKey = GenerateSecureRandomKey(32);
             System.Diagnostics.Debug.WriteLine($"Generated session key: {_sessionKey.Length} bytes");
 
-            // Create handshake
-            var handshake = CreateHandshake(_sessionKey);
-            System.Diagnostics.Debug.WriteLine($"Handshake size: {handshake.Length} bytes");
+            // 4. Encrypt session key with RSA
+            byte[] encSessionKey = rsa.Encrypt(_sessionKey, RSAEncryptionPadding.OaepSHA256);
 
-            await _inputStream.WriteLineAsync(Convert.ToBase64String(handshake));
+            // 5. Send encrypted session key (base64) to Python
+            await _inputStream.WriteLineAsync(Convert.ToBase64String(encSessionKey));
+            await _inputStream.FlushAsync();
 
-            // Wait for confirmation
+            // 6. Wait for confirmation
             var confirmation = await _outputStream.ReadLineAsync();
             if (string.IsNullOrEmpty(confirmation))
-            {
                 throw new SecurityException("No confirmation received from Python backend");
-            }
-
             System.Diagnostics.Debug.WriteLine($"Received confirmation: {confirmation.Length} chars");
-
             var confirmationData = Convert.FromBase64String(confirmation);
             if (!ValidateChannelConfirmation(confirmationData))
-            {
                 throw new SecurityException("Invalid channel confirmation");
-            }
-
             System.Diagnostics.Debug.WriteLine("Secure channel established successfully");
         }
 
@@ -160,86 +167,98 @@ namespace ImAged.Services
             // Send command
             await _inputStream.WriteLineAsync(Convert.ToBase64String(payload));
 
-            // Read response with timeout
+            // Read first response line (metadata), then optionally a second line (payload)
             System.Diagnostics.Debug.WriteLine("Waiting for response from Python...");
 
-            // Use a timeout to prevent hanging
-            var response = await Task.Run(async () =>
+            var metaLine = await Task.Run(async () =>
             {
-                var timeout = Task.Delay(5000); // 5 second timeout
+                var timeout = Task.Delay(30000); // 30 second timeout
                 var readTask = _outputStream.ReadLineAsync();
-
                 var completedTask = await Task.WhenAny(readTask, timeout);
-                if (completedTask == timeout)
-                {
-                    throw new TimeoutException("Timeout waiting for Python response");
-                }
-
+                if (completedTask == timeout) throw new TimeoutException("Timeout waiting for Python response (meta)");
                 return await readTask;
             });
 
-            if (string.IsNullOrEmpty(response))
+            if (string.IsNullOrEmpty(metaLine)) throw new Exception("No response received from Python backend");
+
+            if (metaLine.Length > MaxMetaBase64Chars) throw new Exception("Response meta too large");
+            var metaData = Convert.FromBase64String(metaLine);
+            var metaJson = Encoding.UTF8.GetString(DecryptData(metaData));
+            var meta = System.Text.Json.JsonSerializer.Deserialize<SecureResponse>(metaJson);
+
+            // If there is an encrypted payload, read it on the next line
+            if (meta != null && meta.Success && meta is { Result: not null })
             {
-                throw new Exception("No response received from Python backend");
-            }
-
-            System.Diagnostics.Debug.WriteLine($"Received response: {response.Length} chars");
-
-            var responseData = Convert.FromBase64String(response);
-            var decryptedResponse = DecryptData(responseData);
-            var responseJson = Encoding.UTF8.GetString(decryptedResponse);
-
-            System.Diagnostics.Debug.WriteLine($"Response JSON: {responseJson}");
-
-            return System.Text.Json.JsonSerializer.Deserialize<SecureResponse>(responseJson);
-        }
-
-        private byte[] EncryptData(byte[] data)
-        {
-            using (var aes = Aes.Create())
-            {
-                aes.Key = _sessionKey;
-                aes.Mode = CipherMode.CBC;
-                aes.Padding = PaddingMode.PKCS7;
-
-                // Generate random IV
-                aes.GenerateIV();
-
-                using (var encryptor = aes.CreateEncryptor())
+                var resultDict = meta.Result as System.Text.Json.Nodes.JsonObject;
+                bool hasPayload = false;
+                if (resultDict == null)
                 {
-                    var encrypted = encryptor.TransformFinalBlock(data, 0, data.Length);
+                    // try generic parsing
+                    var doc = System.Text.Json.JsonDocument.Parse(metaJson);
+                    if (doc.RootElement.TryGetProperty("has_payload", out var hp) && hp.GetBoolean())
+                    {
+                        hasPayload = true;
+                    }
+                }
+                else if (resultDict.ContainsKey("has_payload"))
+                {
+                    hasPayload = (bool)resultDict["has_payload"];
+                }
 
-                    // Return IV + encrypted data (Python expects this format)
-                    var result = new byte[aes.IV.Length + encrypted.Length];
-                    Array.Copy(aes.IV, 0, result, 0, aes.IV.Length);
-                    Array.Copy(encrypted, 0, result, aes.IV.Length, encrypted.Length);
+                if (hasPayload)
+                {
+                    var payloadLine = await Task.Run(async () =>
+                    {
+                        var timeout = Task.Delay(30000);
+                        var readTask = _outputStream.ReadLineAsync();
+                        var completedTask = await Task.WhenAny(readTask, timeout);
+                        if (completedTask == timeout) throw new TimeoutException("Timeout waiting for Python response (payload)");
+                        return await readTask;
+                    });
 
-                    return result;
+                    if (string.IsNullOrEmpty(payloadLine)) throw new Exception("No payload received from Python backend");
+                    if (payloadLine.Length > MaxPayloadBase64Chars) throw new Exception("Response payload too large");
+                    var encPayload = Convert.FromBase64String(payloadLine);
+                    var pngBytes = DecryptData(encPayload);
+
+                    // embed payload back into result for the caller
+                    meta.Result = new Dictionary<string, object>
+                    {
+                        { "mime", "image/png" },
+                        { "size", pngBytes.Length },
+                        { "image_data_bytes", pngBytes }
+                    };
                 }
             }
+
+            return meta;
         }
 
-        private byte[] DecryptData(byte[] encryptedData)
-        {
-            using (var aes = Aes.Create())
-            {
-                aes.Key = _sessionKey;
-                aes.Mode = CipherMode.CBC;
-                aes.Padding = PaddingMode.PKCS7;
+        private byte[] EncryptData(byte[] plaintext) {
+            byte[] nonce = RandomNumberGenerator.GetBytes(12);
+            byte[] ciphertext = new byte[plaintext.Length];
+            byte[] tag = new byte[16];
+            using var aesgcm = new AesGcm(_sessionKey);
+            aesgcm.Encrypt(nonce, plaintext, ciphertext, tag, associatedData: null);
+            // pack as nonce|ciphertext|tag
+            var result = new byte[12 + ciphertext.Length + 16];
+            Buffer.BlockCopy(nonce, 0, result, 0, 12);
+            Buffer.BlockCopy(ciphertext, 0, result, 12, ciphertext.Length);
+            Buffer.BlockCopy(tag, 0, result, 12 + ciphertext.Length, 16);
+            return result;
+        }
 
-                // Extract IV (first 16 bytes)
-                var iv = new byte[16];
-                var ciphertext = new byte[encryptedData.Length - 16];
-                Array.Copy(encryptedData, 0, iv, 0, 16);
-                Array.Copy(encryptedData, 16, ciphertext, 0, ciphertext.Length);
-
-                aes.IV = iv;
-
-                using (var decryptor = aes.CreateDecryptor())
-                {
-                    return decryptor.TransformFinalBlock(ciphertext, 0, ciphertext.Length);
-                }
-            }
+        private byte[] DecryptData(byte[] enc) {
+            var nonce = new byte[12];
+            var tag = new byte[16];
+            var ciphertext = new byte[enc.Length - 12 - 16];
+            Buffer.BlockCopy(enc, 0, nonce, 0, 12);
+            Buffer.BlockCopy(enc, 12, ciphertext, 0, ciphertext.Length);
+            Buffer.BlockCopy(enc, 12 + ciphertext.Length, tag, 0, 16);
+            var plaintext = new byte[ciphertext.Length];
+            using var aesgcm = new AesGcm(_sessionKey);
+            aesgcm.Decrypt(nonce, ciphertext, tag, plaintext, associatedData: null);
+            return plaintext;
         }
 
         public void Dispose()
@@ -265,6 +284,8 @@ namespace ImAged.Services
                 }
                 finally
                 {
+                    try { if (_sessionKey != null) System.Security.Cryptography.CryptographicOperations.ZeroMemory(_sessionKey); } catch { }
+                    _sessionKey = null;
                     _pythonProcess?.Dispose();
                     _inputStream?.Dispose();
                     _outputStream?.Dispose();
