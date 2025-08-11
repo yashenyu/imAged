@@ -32,11 +32,15 @@ class TTLFileManager:
 
         stem = Path(input_path).stem
         if output_path is None:
-            if out_dir:
-                os.makedirs(out_dir, exist_ok=True)
-                output_path = str(Path(out_dir) / f"{stem}.ttl")
-            else:
-                output_path = str(Path(input_path).with_suffix(".ttl"))
+            # Always save in the same directory as the original image by default
+            output_path = str(Path(input_path).with_suffix(".ttl"))
+            
+            # Only use output_dir if explicitly set and different from input directory
+            if out_dir and out_dir.strip():
+                input_dir = str(Path(input_path).parent)
+                if out_dir != input_dir:
+                    os.makedirs(out_dir, exist_ok=True)
+                    output_path = str(Path(out_dir) / f"{stem}.ttl")
 
         # Encode image to QOI
         qoi_data = encode_image_to_qoi(input_path)

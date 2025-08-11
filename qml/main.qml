@@ -10,9 +10,7 @@ ApplicationWindow {
     width: 900
     height: 700
     title: "ImAged - Time-Limited Image Encryption"
-    
-    // Modern color scheme
-    color: "#f5f5f5"
+    color: "#ffffff" // clean white background
     
     // Properties for binding to Python backend
     property string imageUrl: pythonApi.imageUrl
@@ -23,16 +21,12 @@ ApplicationWindow {
     property int progress: pythonApi.progress
     property int total: pythonApi.total
 
-    // File dialogs
     FolderDialog {
         id: folderDialog
         title: "Select Folder for Batch Conversion"
-        onAccepted: {
-            pythonApi.batchConvert(folder)
-        }
+        onAccepted: pythonApi.batchConvert(folder)
     }
 
-    // Main layout
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 20
@@ -41,19 +35,20 @@ ApplicationWindow {
         // Header
         Rectangle {
             Layout.fillWidth: true
-            height: 60
-            color: "#2196F3"
-            radius: 8
+            height: 50
+            color: "#f0f0f0"
+            radius: 4
+            border.color: "#cccccc"
 
             RowLayout {
                 anchors.fill: parent
-                anchors.margins: 15
+                anchors.margins: 10
 
                 Text {
                     text: "ImAged"
-                    font.pixelSize: 24
+                    font.pixelSize: 22
                     font.weight: Font.Bold
-                    color: "white"
+                    color: "#333333"
                 }
 
                 Item { Layout.fillWidth: true }
@@ -61,34 +56,30 @@ ApplicationWindow {
                 Text {
                     text: "Time-Limited Image Encryption"
                     font.pixelSize: 14
-                    color: "white"
-                    opacity: 0.8
+                    color: "#666666"
                 }
             }
         }
 
-        // Main content area
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 20
 
-            // Left panel - Image display and controls
+            // Left panel
             ColumnLayout {
                 Layout.preferredWidth: 500
                 Layout.fillHeight: true
                 spacing: 15
 
-                // Image display area
+                // Image display
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    color: "white"
-                    radius: 8
-                    border.color: "#e0e0e0"
-                    border.width: 1
+                    color: "#fafafa"
+                    radius: 4
+                    border.color: "#cccccc"
 
-                    // Image
                     Image {
                         id: imageDisplay
                         anchors.fill: parent
@@ -97,26 +88,25 @@ ApplicationWindow {
                         fillMode: Image.PreserveAspectFit
                         cache: false
 
-                        // Placeholder when no image
                         Rectangle {
                             anchors.fill: parent
-                            color: "#fafafa"
+                            color: "#f5f5f5"
                             visible: !imageDisplay.source || imageDisplay.source === ""
                             
                             ColumnLayout {
                                 anchors.centerIn: parent
-                                spacing: 10
+                                spacing: 8
 
                                 Text {
                                     text: "📷"
-                                    font.pixelSize: 48
+                                    font.pixelSize: 40
                                     horizontalAlignment: Text.AlignHCenter
                                 }
 
                                 Text {
                                     text: "No image loaded"
-                                    font.pixelSize: 16
-                                    color: "#666"
+                                    font.pixelSize: 14
+                                    color: "#777"
                                     horizontalAlignment: Text.AlignHCenter
                                 }
 
@@ -134,194 +124,94 @@ ApplicationWindow {
                 // Image controls
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 10
+                    spacing: 8
 
                     Button {
                         text: "Open Image"
                         Layout.fillWidth: true
-                        height: 40
-                        background: Rectangle {
-                            color: parent.pressed ? "#1976D2" : "#2196F3"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: parent.text
-                            color: "white"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                        height: 35
                         onClicked: pythonApi.openImage()
                     }
 
                     Button {
                         text: "Open TTL"
                         Layout.fillWidth: true
-                        height: 40
-                        background: Rectangle {
-                            color: parent.pressed ? "#388E3C" : "#4CAF50"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: parent.text
-                            color: "white"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                        height: 35
                         onClicked: pythonApi.openTtl()
                     }
 
                     Button {
                         text: "Save PNG"
                         Layout.fillWidth: true
-                        height: 40
-                        background: Rectangle {
-                            color: parent.pressed ? "#F57C00" : "#FF9800"
-                            radius: 6
-                        }
-                        contentItem: Text {
-                            text: parent.text
-                            color: "white"
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
+                        height: 35
                         onClicked: pythonApi.saveAsPng()
                     }
                 }
             }
 
-            // Right panel - Operations and settings
+            // Right panel
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 spacing: 15
 
-                // TTL Conversion Section
+                // TTL Conversion
                 GroupBox {
                     title: "TTL Conversion"
                     Layout.fillWidth: true
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
 
                     ColumnLayout {
                         anchors.fill: parent
-                        spacing: 10
+                        spacing: 8
 
-                        // Quick convert with default TTL
                         Button {
                             text: "Convert to TTL (Default: " + defaultTtlHours + "h)"
                             Layout.fillWidth: true
-                            height: 45
-                            background: Rectangle {
-                                color: parent.pressed ? "#1976D2" : "#2196F3"
-                                radius: 6
-                            }
-                            contentItem: Text {
-                                text: parent.text
-                                color: "white"
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                font.pixelSize: 14
-                            }
+                            height: 35
                             onClicked: pythonApi.convertToTtl()
                         }
 
-                        // Custom expiry section
                         Rectangle {
                             Layout.fillWidth: true
                             height: 120
-                            color: "#f8f9fa"
-                            radius: 6
-                            border.color: "#e9ecef"
-                            border.width: 1
+                            color: "#fafafa"
+                            radius: 4
+                            border.color: "#cccccc"
 
                             ColumnLayout {
                                 anchors.fill: parent
-                                anchors.margins: 10
-                                spacing: 8
+                                anchors.margins: 8
+                                spacing: 6
 
                                 Text {
                                     text: "Custom Expiry:"
                                     font.pixelSize: 12
                                     font.weight: Font.Bold
-                                    color: "#495057"
+                                    color: "#333"
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 5
 
-                                    SpinBox {
-                                        id: yearSpin
-                                        from: 2024
-                                        to: 2030
-                                        value: 2024
-                                        editable: true
-                                        Layout.fillWidth: true
-                                    }
-
+                                    SpinBox { id: yearSpin; from: 2024; to: 2030; value: 2024; editable: true; Layout.fillWidth: true }
                                     Text { text: "-" }
-
-                                    SpinBox {
-                                        id: monthSpin
-                                        from: 1
-                                        to: 12
-                                        value: 1
-                                        editable: true
-                                        Layout.fillWidth: true
-                                    }
-
+                                    SpinBox { id: monthSpin; from: 1; to: 12; value: 1; editable: true; Layout.fillWidth: true }
                                     Text { text: "-" }
-
-                                    SpinBox {
-                                        id: daySpin
-                                        from: 1
-                                        to: 31
-                                        value: 1
-                                        editable: true
-                                        Layout.fillWidth: true
-                                    }
+                                    SpinBox { id: daySpin; from: 1; to: 31; value: 1; editable: true; Layout.fillWidth: true }
                                 }
 
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 5
 
-                                    SpinBox {
-                                        id: hourSpin
-                                        from: 0
-                                        to: 23
-                                        value: 12
-                                        editable: true
-                                        Layout.fillWidth: true
-                                    }
-
+                                    SpinBox { id: hourSpin; from: 0; to: 23; value: 12; editable: true; Layout.fillWidth: true }
                                     Text { text: ":" }
-
-                                    SpinBox {
-                                        id: minuteSpin
-                                        from: 0
-                                        to: 59
-                                        value: 0
-                                        editable: true
-                                        Layout.fillWidth: true
-                                    }
-
+                                    SpinBox { id: minuteSpin; from: 0; to: 59; value: 0; editable: true; Layout.fillWidth: true }
                                     Item { Layout.fillWidth: true }
-
                                     Button {
                                         text: "Convert"
-                                        height: 30
-                                        background: Rectangle {
-                                            color: parent.pressed ? "#388E3C" : "#4CAF50"
-                                            radius: 4
-                                        }
-                                        contentItem: Text {
-                                            text: parent.text
-                                            color: "white"
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                            font.pixelSize: 12
-                                        }
+                                        height: 28
                                         onClicked: {
                                             pythonApi.convertToTtlCustom(
                                                 yearSpin.value, monthSpin.value, 
@@ -333,42 +223,19 @@ ApplicationWindow {
                             }
                         }
 
-                        // Batch conversion
                         Button {
                             text: "Batch Convert Folder"
                             Layout.fillWidth: true
-                            height: 40
-                            background: Rectangle {
-                                color: parent.pressed ? "#7B1FA2" : "#9C27B0"
-                                radius: 6
-                            }
-                            contentItem: Text {
-                                text: parent.text
-                                color: "white"
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
+                            height: 35
                             onClicked: folderDialog.open()
                         }
 
-                        // Progress bar for batch operations
                         ProgressBar {
                             id: progressBar
                             Layout.fillWidth: true
-                            height: 20
+                            height: 18
                             visible: total > 0
                             value: total > 0 ? progress / total : 0
-                            
-                            background: Rectangle {
-                                color: "#e0e0e0"
-                                radius: 10
-                            }
-                            
-                            contentItem: Rectangle {
-                                color: "#4CAF50"
-                                radius: 10
-                                width: progressBar.visualPosition * parent.width
-                            }
                         }
 
                         Text {
@@ -380,82 +247,37 @@ ApplicationWindow {
                     }
                 }
 
-                // Settings Section
+                // Settings
                 GroupBox {
                     title: "Settings"
                     Layout.fillWidth: true
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
 
                     ColumnLayout {
                         anchors.fill: parent
-                        spacing: 10
+                        spacing: 8
 
-                        // Default TTL
                         RowLayout {
                             Layout.fillWidth: true
-                            Text {
-                                text: "Default TTL (hours):"
-                                Layout.preferredWidth: 120
-                                font.pixelSize: 12
-                            }
-                            SpinBox {
-                                id: defaultTtlSpin
-                                from: 1
-                                to: 8760  // 1 year
-                                value: defaultTtlHours
-                                editable: true
-                                Layout.fillWidth: true
-                            }
+                            Text { text: "Default TTL (hours):"; Layout.preferredWidth: 120; font.pixelSize: 12 }
+                            SpinBox { id: defaultTtlSpin; from: 1; to: 8760; value: defaultTtlHours; editable: true; Layout.fillWidth: true }
                         }
 
-                        // NTP Server
                         RowLayout {
                             Layout.fillWidth: true
-                            Text {
-                                text: "NTP Server:"
-                                Layout.preferredWidth: 120
-                                font.pixelSize: 12
-                            }
-                            TextField {
-                                id: ntpServerField
-                                text: ntpServer
-                                Layout.fillWidth: true
-                                placeholderText: "pool.ntp.org"
-                            }
+                            Text { text: "NTP Server:"; Layout.preferredWidth: 120; font.pixelSize: 12 }
+                            TextField { id: ntpServerField; text: ntpServer; Layout.fillWidth: true; placeholderText: "pool.ntp.org" }
                         }
 
-                        // Output Directory
                         RowLayout {
                             Layout.fillWidth: true
-                            Text {
-                                text: "Output Dir:"
-                                Layout.preferredWidth: 120
-                                font.pixelSize: 12
-                            }
-                            TextField {
-                                id: outputDirField
-                                text: outputDir
-                                Layout.fillWidth: true
-                                placeholderText: "Leave empty for same directory"
-                            }
+                            Text { text: "Output Dir:"; Layout.preferredWidth: 120; font.pixelSize: 12 }
+                            TextField { id: outputDirField; text: outputDir; Layout.fillWidth: true; placeholderText: "Leave empty for same directory" }
                         }
 
-                        // Save settings button
                         Button {
                             text: "Save Settings"
                             Layout.fillWidth: true
-                            height: 35
-                            background: Rectangle {
-                                color: parent.pressed ? "#1976D2" : "#2196F3"
-                                radius: 6
-                            }
-                            contentItem: Text {
-                                text: parent.text
-                                color: "white"
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
+                            height: 32
                             onClicked: {
                                 pythonApi.savePreferences(
                                     defaultTtlSpin.value.toString(),
@@ -467,30 +289,28 @@ ApplicationWindow {
                     }
                 }
 
-                // Status Section
+                // Status
                 GroupBox {
                     title: "Status"
                     Layout.fillWidth: true
-                    font.pixelSize: 14
-                    font.weight: Font.Bold
+                    Layout.fillHeight: true   // Make it expand vertically
 
                     Rectangle {
                         anchors.fill: parent
-                        color: "#f8f9fa"
-                        radius: 6
-                        border.color: "#e9ecef"
-                        border.width: 1
+                        color: "#fafafa"
+                        radius: 4
+                        border.color: "#cccccc"
 
                         ScrollView {
                             anchors.fill: parent
-                            anchors.margins: 10
+                            anchors.margins: 8
 
                             Text {
                                 text: statusText || "Ready"
-                                font.pixelSize: 12
-                                color: "#495057"
+                                font.pixelSize: 16    // Bigger text for readability
+                                color: "#333"
                                 wrapMode: Text.WordWrap
-                                width: parent.width
+                                width: parent.width - 16 // Helps text wrap properly
                             }
                         }
                     }
@@ -499,7 +319,6 @@ ApplicationWindow {
         }
     }
 
-    // Initialize with current date/time
     Component.onCompleted: {
         var now = new Date()
         yearSpin.value = now.getFullYear()
