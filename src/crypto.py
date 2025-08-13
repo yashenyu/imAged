@@ -4,7 +4,6 @@ import logging
 import keyring
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 SERVICE  = "ImAged"
 KEY_NAME = "master_key"
@@ -48,13 +47,6 @@ def derive_cek(salt: bytes, length: int = 32) -> bytes:
     cek = hkdf.derive(MASTER_KEY)
     logging.debug("Derived CEK with salt %s", salt.hex())
     return cek
-
-def encrypt_data(cek: bytes, plaintext: bytes) -> tuple[bytes, bytes, bytes]:
-    aesgcm = AESGCM(cek)
-    nonce = os.urandom(12)
-    ct_and_tag = aesgcm.encrypt(nonce, plaintext, None)
-    logging.debug("Encrypted %d bytes payload", len(plaintext))
-    return nonce, ct_and_tag[:-16], ct_and_tag[-16:]
 
 def derive_subkey(salt: bytes, info: bytes, length: int = 32) -> bytes:
     hkdf = HKDF(

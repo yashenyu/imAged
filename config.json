@@ -1,5 +1,6 @@
 {
   "default_ttl_hours": 1,
-  "ntp_server": "pool.ntp.org",
-  "output_dir": ""
+  "ntp_server": "time.google.com",
+  "output_dir": "",
+  "enable_qoi": false
 }
