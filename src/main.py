@@ -75,13 +75,7 @@ class SimpleTestUI:
         tk.Button(exp_frame, text="Now + 1h", command=self.set_default_expiry).pack(side=tk.LEFT)
         self.set_default_expiry()
         
-        # QOI Conversion toggle
-        qoi_frame = tk.Frame(root)
-        qoi_frame.pack(pady=5)
-        self.qoi_var = tk.BooleanVar(value=self.ttl_manager.enable_qoi)
-        qoi_check = tk.Checkbutton(qoi_frame, text="Enable QOI Conversion", variable=self.qoi_var, 
-                                  command=self.update_qoi_status)
-        qoi_check.pack(side=tk.LEFT)
+        # Conversion setting removed
         
         # NTP Status and Test
         ntp_frame = tk.Frame(root)
@@ -148,7 +142,7 @@ class SimpleTestUI:
             t.tag_configure("seg-tag", background="#f8d7da")         # light red
             t.tag_configure("seg-ct", background="#e2e3e5")          # light gray
             t.tag_configure("seg-original", background="#f0f0f0")    # light gray
-            t.tag_configure("seg-qoi", background="#e6ffe6")         # pale green
+            t.tag_configure("seg-payload", background="#e6ffe6")     # pale green
             t.tag_configure("seg-file", background="#f2f2f2")        # very light gray
 
         self.current_image = None
@@ -160,12 +154,7 @@ class SimpleTestUI:
         default_expiry = datetime.now() + timedelta(hours=1)
         self.expiry_var.set(default_expiry.strftime("%Y-%m-%d %H:%M"))
     
-    def update_qoi_status(self):
-        """Update QOI conversion status and refresh TTL manager configuration."""
-        self.ttl_manager.enable_qoi = self.qoi_var.get()
-        status_text = "ENABLED" if self.qoi_var.get() else "DISABLED"
-        self.status_var.set(f"QOI Conversion: {status_text}")
-        logging.info(f"QOI conversion setting updated: {status_text}")
+    # (QOI status handling removed)
     
     def update_ntp_status(self):
         """Update NTP status display with current connection status."""
@@ -209,7 +198,6 @@ class SimpleTestUI:
             from config import load_config
             new_config = load_config()
             self.ttl_manager.cfg = new_config
-            self.ttl_manager.enable_qoi = bool(new_config.get("enable_qoi", False))
             logging.info("TTL manager configuration refreshed")
         except Exception as e:
             logging.error(f"Failed to refresh TTL manager configuration: {e}")
@@ -246,12 +234,7 @@ class SimpleTestUI:
         ttl_entry = tk.Entry(ttl_frame, textvariable=ttl_hours_var, width=40)
         ttl_entry.pack(fill=tk.X, pady=2)
         
-        # QOI configuration
-        qoi_frame = tk.Frame(config_dialog)
-        qoi_frame.pack(fill=tk.X, padx=20, pady=10)
-        qoi_var = tk.BooleanVar(value=current_config.get("enable_qoi", False))
-        qoi_check = tk.Checkbutton(qoi_frame, text="Enable QOI Conversion", variable=qoi_var)
-        qoi_check.pack(anchor=tk.W)
+        # (QOI configuration removed)
         
         # Output directory configuration
         output_frame = tk.Frame(config_dialog)
@@ -277,7 +260,6 @@ class SimpleTestUI:
                 new_config = {
                     "ntp_server": ntp_server_var.get().strip(),
                     "default_ttl_hours": ttl_hours,
-                    "enable_qoi": qoi_var.get(),
                     "output_dir": output_dir_var.get().strip()
                 }
                 
@@ -293,13 +275,9 @@ class SimpleTestUI:
                 
                 # Update TTL manager configuration
                 self.ttl_manager.cfg = new_config
-                self.ttl_manager.enable_qoi = new_config["enable_qoi"]
                 
                 # Refresh TTL manager with new configuration
                 self.refresh_ttl_manager_config()
-                
-                # Update QOI checkbox
-                self.qoi_var.set(new_config["enable_qoi"])
                 
                 # Update NTP status
                 self.update_ntp_status()
@@ -442,24 +420,13 @@ class SimpleTestUI:
                 raise Exception("Failed to decrypt TTL file or file expired.")
             self._log_timing("Decrypt TTL file", step_start, len(payload_bytes))
             
-            # Interpret decrypted payload based on configuration settings
+            # Interpret decrypted payload as a standard image
             step_start = time.time()
-            enable_qoi = bool(self.ttl_manager.enable_qoi)
-            if enable_qoi:
-                # Decode QOI format to PIL Image object
-                import qoi
-                arr = qoi.decode(payload_bytes)  # RGBA ndarray
-                img = Image.fromarray(arr, mode="RGBA")
-                pixel_message = f"Decoded QOI: {arr.shape[1]}x{arr.shape[0]} pixels"
-                logging.info(pixel_message)
-                print(pixel_message)
-            else:
-                # Load original image format directly from bytes
-                import io
-                img = Image.open(io.BytesIO(payload_bytes)).convert("RGBA")
-                pixel_message = f"Loaded original: {img.width}x{img.height} pixels"
-                logging.info(pixel_message)
-                print(pixel_message)
+            import io
+            img = Image.open(io.BytesIO(payload_bytes)).convert("RGBA")
+            pixel_message = f"Loaded image: {img.width}x{img.height} pixels"
+            logging.info(pixel_message)
+            print(pixel_message)
             self._log_timing("Image interpretation", step_start)
             
             # Generate thumbnail for UI display
@@ -765,9 +732,8 @@ class SimpleTestUI:
 
         # Left (source)
         self._append_section_to(L, "original", "Original source image bytes as read", 0, stages["original"], "seg-original")
-        # Describe payload depending on config
-        payload_desc = "QOI-encoded image bytes (plaintext before encryption)" if self.ttl_manager.enable_qoi else "Original image bytes (plaintext before encryption)"
-        self._append_section_to(L, "payload", payload_desc, 0, stages["payload"], "seg-qoi")
+        # Payload (plaintext before encryption)
+        self._append_section_to(L, "payload", "Payload bytes (plaintext before encryption)", 0, stages["payload"], "seg-payload")
 
         # Right (TTL layout)
         off = 0; MAGIC = b"IMAGED"
@@ -804,8 +770,7 @@ class SimpleTestUI:
         self._append_section_to(R, "nonce_body", "GCM nonce for body", off, stages["nonce_body"], "seg-nonce"); off += 12
         self._append_section_to(R, "tag_body", "AES-GCM tag for body (AAD=header)", off, stages["tag_body"], "seg-tag"); off += 16
         self._append_section_to(R, "ciphertext_body", "Encrypted payload bytes", off, stages["ciphertext_body"], "seg-ct")
-        payload_desc = "Decrypted QOI bytes (plaintext after decryption)" if self.ttl_manager.enable_qoi else "Decrypted original image bytes (plaintext after decryption)"
-        self._append_section_to(R, "payload", payload_desc, 0, stages["payload"], "seg-qoi")
+        self._append_section_to(R, "payload", "Decrypted payload bytes (plaintext after decryption)", 0, stages["payload"], "seg-payload")
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -1,38 +1,42 @@
 import os
 import binascii
 import logging
-import keyring
+from pathlib import Path
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
 
-SERVICE  = "ImAged"
-KEY_NAME = "master_key"
+def _master_key_path() -> Path:
+    return Path(__file__).parent / "config" / "master.key"
 
-def _load_or_generate_master_key() -> bytes:
-    env_hex = os.getenv("IMAGED_MASTER_KEY")
-    if env_hex:
-        try:
-            key = binascii.unhexlify(env_hex)
-            logging.info("Loaded MASTER_KEY from environment")
+def _load_or_create_static_master_key() -> bytes:
+    path = _master_key_path()
+    try:
+        if path.exists():
+            raw = path.read_bytes()
+            # Try hex-encoded first if content looks textual hex
+            stripped = raw.strip()
+            try:
+                if stripped and all(c in b"0123456789abcdefABCDEF" for c in stripped):
+                    key = binascii.unhexlify(stripped)
+                else:
+                    key = raw
+            except Exception:
+                key = raw
+            if len(key) != 32:
+                raise ValueError(f"master.key must be 32 bytes (got {len(key)})")
+            logging.info("Loaded static MASTER_KEY from %s", path)
             return key
-        except Exception:
-            logging.warning("Invalid IMAGED_MASTER_KEY env var (expecting hex)")
+        # Create if not present
+        key = os.urandom(32)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(key)
+        logging.info("Generated new static MASTER_KEY at %s", path)
+        return key
+    except Exception as e:
+        logging.error("Failed to load/create static master key: %s", e)
+        raise
 
-    stored = keyring.get_password(SERVICE, KEY_NAME)
-    if stored:
-        try:
-            key = binascii.unhexlify(stored)
-            logging.info("Loaded MASTER_KEY from keyring")
-            return key
-        except Exception:
-            logging.warning("Invalid key in keyring; regenerating")
-
-    new_key = os.urandom(32)
-    keyring.set_password(SERVICE, KEY_NAME, binascii.hexlify(new_key).decode())
-    logging.info("Generated new MASTER_KEY and stored in keyring %s/%s", SERVICE, KEY_NAME)
-    return new_key
-
-MASTER_KEY = _load_or_generate_master_key()
+MASTER_KEY = _load_or_create_static_master_key()
 
 def generate_salt(length: int = 16) -> bytes:
     return os.urandom(length)

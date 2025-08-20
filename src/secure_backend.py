@@ -4,6 +4,8 @@ import base64
 import struct
 import logging
 import os
+import gc
+import weakref
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import serialization, hashes, padding as sym_padding
 from cryptography.hazmat.primitives.asymmetric import rsa, padding as asym_padding
@@ -18,6 +20,7 @@ class SecureBackend:
         self.session_key = None
         self.private_key = None
         self.public_key = None
+        self._memory_pool = weakref.WeakSet()
         self.establish_secure_channel()
         logger.info("Secure backend initialized")
 
@@ -104,9 +107,7 @@ class SecureBackend:
             command_data = json.loads(decrypted_command.decode())
 
             command = command_data.get('Command') or command_data.get('command')
-            parameters = command_data.get('parameters', {})
-
-            logger.info(f"Processing command: {command}")
+            parameters = command_data.get('Parameters', {}) or command_data.get('parameters', {})
 
             if command == "CONVERT_TO_TTL":
                 return self.handle_convert_to_ttl(parameters)
@@ -133,73 +134,74 @@ class SecureBackend:
                 "result": None
             }
 
-    def handle_convert_to_ttl(self, parameters):
-        try:
-            input_path = parameters.get('input_path')
-            expiry_ts = parameters.get('expiry_ts')
-
-            if not input_path:
-                return {"success": False, "error": "No input path provided", "result": None}
-
-            from converter import convert_to_ttl
-            result_path = convert_to_ttl(input_path, expiry_ts)
-
-            return {"success": True, "error": None, "result": result_path}
-
-        except Exception as e:
-            logger.error(f"Error in convert_to_ttl: {e}")
-            return {"success": False, "error": str(e), "result": None}
-
     def handle_open_ttl(self, parameters):
         try:
+            logger.info(f"Received parameters: {parameters}")
+        
+            if parameters is None:
+                logger.error("Parameters is None")
+                return {"success": False, "error": "Parameters is None", "result": None}
+        
             input_path = parameters.get('input_path')
+            thumbnail_mode = parameters.get('thumbnail_mode', False)
+            max_size = parameters.get('max_size', 1024)
+            
+            logger.info(f"Opening TTL file: {input_path} (thumbnail: {thumbnail_mode}, max_size: {max_size})")
+        
+            try:
+                from secure_image_service import SecureImageService
+                service = SecureImageService()
+            
+                if thumbnail_mode:
+                    payload_bytes = service.render_ttl_thumbnail_secure(input_path, max_size=max_size)
+                else:
+                    payload_bytes = service.render_ttl_image_secure(input_path, max_display_time=30)
+            
+                if payload_bytes:
+                    payload_base64 = base64.b64encode(payload_bytes).decode('utf-8')
+                
+                    logger.info(f"Successfully converted {len(payload_bytes)} bytes to base64")
+                    
+                    self._track_memory_usage(len(payload_bytes))
+                    
+                    return {"success": True, "error": None, "result": payload_base64}
+                else:
+                    return {"success": False, "error": "Failed to render TTL image", "result": None}
+                
+            except ImportError as e:
+                logger.error(f"Import error: {e}")
+                return {"success": False, "error": f"Import error: {e}", "result": None}
 
-            if not input_path:
-                return {"success": False, "error": "No input path provided", "result": None}
-
-            from converter import open_ttl
-            payload_bytes, fallback = open_ttl(input_path)
-
-            meta = {
-                "success": True,
-                "error": None,
-                "result": {
-                    "mime": "application/octet-stream",
-                    "size": len(payload_bytes),
-                    "fallback": fallback
-                },
-                "has_payload": True
-            }
-
-            return ("STREAM", meta, payload_bytes)
+            except Exception as e:
+                logger.error(f"Error rendering TTL image: {e}")
+                return {"success": False, "error": f"Rendering error: {e}", "result": None}
 
         except Exception as e:
             logger.error(f"Error in open_ttl: {e}")
             return {"success": False, "error": str(e), "result": None}
 
-    def handle_batch_convert(self, parameters):
+    def _track_memory_usage(self, bytes_used):
         try:
-            input_paths = parameters.get('input_paths', [])
-            expiry_ts = parameters.get('expiry_ts')
+            import psutil
+            process = psutil.Process()
+            memory_mb = process.memory_info().rss / (1024 * 1024)
+            
+            if memory_mb > 500: 
+                logger.warning(f"High memory usage detected: {memory_mb:.1f}MB, triggering cleanup")
+                self._force_memory_cleanup()
+                
+        except ImportError:
+            self._force_memory_cleanup()
 
-            if not input_paths:
-                return {"success": False, "error": "No input paths provided", "result": None}
-
-            from converter import convert_to_ttl
-            results = []
-
-            for path in input_paths:
-                try:
-                    result_path = convert_to_ttl(path, expiry_ts)
-                    results.append(result_path)
-                except Exception as e:
-                    results.append(f"ERROR: {str(e)}")
-
-            return {"success": True, "error": None, "result": results}
-
-        except Exception as e:
-            logger.error(f"Error in batch_convert: {e}")
-            return {"success": False, "error": str(e), "result": None}
+    def _force_memory_cleanup(self):
+        logger.info("Forcing memory cleanup")
+        
+        self._memory_pool.clear()
+        
+        for _ in range(3):
+            gc.collect()
+        
+        logger.info("Memory cleanup completed")
 
     def handle_get_config(self, parameters):
         try:
@@ -215,6 +217,8 @@ class SecureBackend:
         except Exception as e:
             logger.error(f"Error in get_config: {e}")
             return {"success": False, "error": str(e), "result": None}
+
+
 
     def handle_set_config(self, parameters):
         try:

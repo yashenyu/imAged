@@ -1,30 +1,21 @@
-import gc
+﻿import gc
 import ctypes
 import threading
 import time
 import logging
 from typing import Optional, Tuple
-from PIL import Image
+from PIL import Image, ImageOps
 import io
 from aes_gcm import AES_GCM 
 
 
 class SecureImageService:
-    """Secure image rendering service with immediate cleanup."""
     
     def __init__(self):
         self._active_sessions = {}
         self._cleanup_lock = threading.Lock()
     
     def _log_timing(self, step_name, start_time, data_size=None):
-        """
-        Log timing information for a process step with performance metrics.
-        
-        Args:
-            step_name: Name of the process step being timed
-            start_time: Timestamp when the step began
-            data_size: Optional data size in bytes for throughput calculation
-        """
         elapsed = time.time() - start_time
         if data_size:
             size_mb = data_size / (1024 * 1024)
@@ -37,22 +28,6 @@ class SecureImageService:
         print(f"  {message}")
     
     def render_ttl_image_secure(self, ttl_path: str, max_display_time: int = 30) -> Optional[bytes]:
-        """
-        Render TTL image with secure memory handling and comprehensive timing analysis.
-        
-        This method implements a secure image rendering pipeline that:
-        - Loads encrypted TTL files without temporary file creation
-        - Performs just-in-time decryption in memory
-        - Implements automatic memory cleanup after specified timeout
-        - Provides detailed performance metrics for each processing stage
-        
-        Args:
-            ttl_path: Path to TTL file for secure rendering
-            max_display_time: Maximum time in seconds before automatic cleanup
-            
-        Returns:
-            Decrypted image bytes for immediate display, or None if processing fails
-        """
         session_id = f"render_{hash(ttl_path)}_{int(time.time())}"
         
         total_start = time.time()
@@ -104,36 +79,92 @@ class SecureImageService:
             logging.error(error_message)
             print(error_message)
             return None
+            
+    def render_ttl_thumbnail_secure(self, ttl_path: str, max_size: int = 128) -> Optional[bytes]:
+        session_id = f"thumb_{hash(ttl_path)}_{int(time.time())}"
+        
+        total_start = time.time()
+        print(f"Starting secure TTL thumbnail generation")
+        logging.info(f"Starting secure TTL thumbnail generation")
+        
+        try:
+            # Load encrypted TTL file into memory
+            step_start = time.time()
+            encrypted_bytes = self._load_encrypted_ttl(ttl_path)
+            self._log_timing("Load encrypted TTL", step_start, len(encrypted_bytes))
+            
+            # Execute just-in-time decryption
+            step_start = time.time()
+            decrypted_bytes = self._decrypt_just_in_time_memory_only(encrypted_bytes)
+            self._log_timing("Decrypt TTL", step_start, len(decrypted_bytes))
+            
+            # Create optimized thumbnail
+            step_start = time.time()
+            thumbnail_bytes = self._create_optimized_thumbnail(decrypted_bytes, max_size)
+            self._log_timing("Create thumbnail", step_start, len(thumbnail_bytes))
+            
+            # Setup cleanup timer
+            step_start = time.time()
+            cleanup_timer = threading.Timer(
+                10,  # Shorter timeout for thumbnails
+                self._secure_cleanup_session, 
+                args=[session_id, decrypted_bytes]
+            )
+            cleanup_timer.start()
+            self._log_timing("Setup cleanup timer", step_start)
+            
+            # Track session
+            step_start = time.time()
+            with self._cleanup_lock:
+                self._active_sessions[session_id] = {
+                    'encrypted_bytes': encrypted_bytes,
+                    'timer': cleanup_timer,
+                    'created': time.time(),
+                    'ttl_path': ttl_path
+                }
+            self._log_timing("Track session", step_start)
+            
+            total_elapsed = time.time() - total_start
+            completion_message = f"Secure TTL thumbnail generation completed in {total_elapsed:.3f}s"
+            logging.info(completion_message)
+            print(completion_message)
+            
+            return thumbnail_bytes
+            
+        except Exception as e:
+            total_elapsed = time.time() - total_start
+            error_message = f"Secure TTL thumbnail generation failed after {total_elapsed:.3f}s: {e}"
+            logging.error(error_message)
+            print(error_message)
+            return None
+
+    def _create_optimized_thumbnail(self, image_bytes: bytes, max_size: int) -> bytes:
+        try:
+            # Load image from bytes
+            with Image.open(io.BytesIO(image_bytes)) as img:
+                # Convert to RGB if necessary
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    img = img.convert('RGB')
+                
+                # Create thumbnail with memory optimization
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                
+                # Convert to optimized format
+                output = io.BytesIO()
+                img.save(output, format='JPEG', quality=85, optimize=True)
+                output.seek(0)
+                
+                return output.getvalue()
+                
+        except Exception as e:
+            logging.error(f"Error creating thumbnail: {e}")
+            raise
     
     def _load_encrypted_ttl(self, ttl_path: str) -> bytes:
-        """
-        Load TTL file into memory while maintaining encryption.
-        
-        Args:
-            ttl_path: Path to TTL file for loading
-            
-        Returns:
-            Encrypted file contents as bytes
-        """
         with open(ttl_path, 'rb') as f:
             return f.read()
     
     def _decrypt_just_in_time_memory_only(self, encrypted_bytes: bytes) -> bytes:
-        """
-        Decrypt image bytes just before rendering using in-memory processing.
-        
-        This method implements the complete TTL decryption pipeline:
-        - Header parsing and structure validation
-        - Header authentication and expiry verification
-        - Body decryption and payload recovery
-        - Performance metrics for each processing stage
-        
-        Args:
-            encrypted_bytes: Encrypted TTL file contents
-            
-        Returns:
-            Decrypted payload bytes for image rendering
-        """
         def decrypt_ttl_from_memory(ttl_bytes: bytes) -> bytes:
             import struct
             from crypto import derive_cek, derive_subkey
@@ -211,19 +242,6 @@ class SecureImageService:
         return decrypt_ttl_from_memory(encrypted_bytes)
     
     def _secure_cleanup_session(self, session_id: str, decrypted_bytes: bytes):
-        """
-        Securely cleanup session and zero memory using cryptographic best practices.
-        
-        This method implements secure memory management by:
-        - Overwriting sensitive data in memory before deletion
-        - Using ctypes for low-level memory manipulation
-        - Implementing multiple garbage collection passes
-        - Maintaining thread safety during cleanup operations
-        
-        Args:
-            session_id: Unique identifier for the session to cleanup
-            decrypted_bytes: Sensitive data to securely erase from memory
-        """
         cleanup_start = time.time()
         cleanup_message = f"Starting secure cleanup for session {session_id}"
         logging.info(cleanup_message)
@@ -255,17 +273,6 @@ class SecureImageService:
         print(completion_message)
     
     def _zero_memory(self, data: bytes):
-        """
-        Zero out memory using low-level system calls for security.
-        
-        This method implements secure memory erasure using:
-        - ctypes for direct memory manipulation
-        - Fallback to Python-level memory zeroing
-        - Multiple cleanup strategies for reliability
-        
-        Args:
-            data: Sensitive data to securely erase from memory
-        """
         try:
             # Create mutable copy and zero using ctypes
             mutable_data = bytearray(data)
@@ -284,15 +291,6 @@ class SecureImageService:
             gc.collect()
     
     def force_cleanup_all_sessions(self):
-        """
-        Force cleanup of all active sessions for emergency memory management.
-        
-        This method provides emergency cleanup capabilities by:
-        - Cancelling all active cleanup timers
-        - Clearing all session metadata
-        - Implementing forced garbage collection
-        - Providing comprehensive cleanup reporting
-        """
         cleanup_start = time.time()
         cleanup_message = f"Starting force cleanup of all sessions"
         logging.info(cleanup_message)
@@ -305,7 +303,6 @@ class SecureImageService:
                 logging.info(f"Force cleanup: Session {session_id} cleared")
             self._active_sessions.clear()
         
-        # Implement forced garbage collection for thorough cleanup
         for _ in range(3):
             gc.collect()
         

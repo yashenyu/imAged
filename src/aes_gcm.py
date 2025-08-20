@@ -20,7 +20,6 @@ class InvalidTagException(Exception):
 
 class AES_GCM:
     def __init__(self, key: bytes):
-        """Initialize with performance tracking."""
         self._perf_data = {
             'total_encrypt': 0,
             'total_decrypt': 0,
@@ -60,7 +59,6 @@ class AES_GCM:
         return result
 
     def _precompute_ghash_table(self):
-        """Precompute tables for fast GHASH: T[i][b] = (H * (b << (8*i))) in GF(2^128)."""
         H = self._auth_key
         table = []
         for i in range(16):
@@ -72,7 +70,6 @@ class AES_GCM:
         return tuple(table)
     
     def _mul_H(self, x: int) -> int:
-        """Fast multiply using precomputed GHASH table."""
         acc = 0
         for i in range(16):
             byte = (x >> (8 * i)) & 0xFF
@@ -81,7 +78,6 @@ class AES_GCM:
 
     @staticmethod
     def _gf_2_128_mul(x: int, y: int) -> int:
-        """Galois Field (2^128) multiplication."""
         res = 0
         for i in range(127, -1, -1):
             res ^= x * ((y >> i) & 1)
@@ -89,7 +85,6 @@ class AES_GCM:
         return res
 
     def encrypt(self, nonce: bytes, plaintext: bytes, associated_data: bytes = b'') -> bytes:
-        """Encrypt with performance tracking."""
         start_time = time.perf_counter()
         
         if len(nonce) != 12:
@@ -130,7 +125,6 @@ class AES_GCM:
         return ciphertext + tag.to_bytes(16, 'big')
 
     def decrypt(self, nonce: bytes, data: bytes, associated_data: bytes = b'') -> bytes:
-        """Decrypt with performance tracking."""
         start_time = time.perf_counter()
         
         if len(nonce) != 12:
@@ -174,17 +168,14 @@ class AES_GCM:
         return plaintext
 
     def _build_counter(self, nonce: bytes) -> bytes:
-        """Build initial counter block."""
         return nonce + b'\x00\x00\x00\x02'
 
     def _compute_final_tag(self, init_value: int) -> int:
-        """Compute final tag using prebuilt AES-ECB cipher."""
         encryptor = self._aes_ecb_cipher.encryptor()
         block = ((init_value << 32) | 1).to_bytes(16, 'big')
         return int.from_bytes(encryptor.update(block) + encryptor.finalize(), 'big')
 
     def _ghash(self, aad: bytes, ciphertext: bytes) -> int:
-        """GHASH with table-based multiplication."""
         tag = 0
         aad_len = len(aad)
         c_len = len(ciphertext)
@@ -207,5 +198,4 @@ class AES_GCM:
         return self._mul_H(tag ^ len_block)
 
     def get_performance_stats(self) -> dict:
-        """Return collected performance statistics."""
         return self._perf_data
