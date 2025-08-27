@@ -47,6 +47,8 @@ class AES_GCM:
         )
         self._auth_key = self._compute_auth_key()
         
+        self._ghash_tables = self._precompute_ghash_tables()
+        
         init_time = time.perf_counter() - start_time
         self._perf_data['init_time'] = init_time
         
@@ -59,6 +61,20 @@ class AES_GCM:
         self._perf_data['aes_operations'] += 1
         self._perf_data['auth_key_time'] = time.perf_counter() - start
         return result
+
+    def _precompute_ghash_tables(self) -> dict:
+        tables = {}
+        H = self._auth_key
+        
+        tables[2] = self._gf_2_128_mul_fast(H, H)
+        tables[4] = self._gf_2_128_mul_fast(tables[2], tables[2])
+        tables[8] = self._gf_2_128_mul_fast(tables[4], tables[4])
+        tables[16] = self._gf_2_128_mul_fast(tables[8], tables[8])
+        tables[32] = self._gf_2_128_mul_fast(tables[16], tables[16])
+        tables[64] = self._gf_2_128_mul_fast(tables[32], tables[32])
+        tables[128] = self._gf_2_128_mul_fast(tables[64], tables[64])
+        
+        return tables
 
     def _gf_2_128_mul_fast(self, x: int, y: int) -> int:
         # NIST SP 800-38D Algorithm 1: MSB-first bit processing
@@ -82,6 +98,14 @@ class AES_GCM:
         
         return Z & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
+    def _gf_2_128_mul_optimized(self, x: int, y: int) -> int:
+        if y == self._auth_key:
+            for power, value in self._ghash_tables.items():
+                if x == value:
+                    return self._ghash_tables.get(power * 2, self._gf_2_128_mul_fast(x, y))
+        
+        return self._gf_2_128_mul_fast(x, y)
+
     def _ghash_fast_with_table(self, aad: bytes, ciphertext: bytes) -> int:
         # NIST SP 800-38D: GHASH_H(A || 0^v || C || 0^u || [len(A)]_64 || [len(C)]_64)
         aad_len = len(aad)
@@ -95,9 +119,14 @@ class AES_GCM:
         ghash_input += len_block
         
         hash_val = 0
+        blocks = []
+        
         for i in range(0, len(ghash_input), 16):
             block = int.from_bytes(ghash_input[i:i+16], 'big')
-            hash_val = self._gf_2_128_mul_fast(hash_val ^ block, self._auth_key)
+            blocks.append(block)
+        
+        for block in blocks:
+            hash_val = self._gf_2_128_mul_optimized(hash_val ^ block, self._auth_key)
             self._perf_data['ghash_operations'] += 1
         
         return hash_val
@@ -126,19 +155,15 @@ class AES_GCM:
 
         j0 = self._derive_J0(nonce)
         
-        cipher_start = time.perf_counter()
-        ciphertext = self._gctr(self._inc32(j0), plaintext)
-        ctr_time = time.perf_counter() - cipher_start
+        ciphertext = self._gctr_optimized(self._inc32(j0), plaintext)
         self._perf_data['aes_operations'] += 1
 
-        ghash_start = time.perf_counter()
         tag = self._ghash_fast_with_table(associated_data, ciphertext)
         
         # NIST SP 800-38D: T = GHASH ⊕ E_K(J0)
         encryptor = self._aes_ecb_cipher.encryptor()
         tag_mask = int.from_bytes(encryptor.update(j0) + encryptor.finalize(), 'big')
         tag ^= tag_mask
-        ghash_time = time.perf_counter() - ghash_start
         self._perf_data['aes_operations'] += 1
 
         total_time = time.perf_counter() - start_time
@@ -161,7 +186,6 @@ class AES_GCM:
         received_tag = data[-tag_len_bytes:]
         j0 = self._derive_J0(nonce)
 
-        verify_start = time.perf_counter()
         computed_tag_val = self._ghash_fast_with_table(associated_data, ciphertext)
         
         # NIST SP 800-38D: T = GHASH ⊕ E_K(J0)
@@ -170,7 +194,6 @@ class AES_GCM:
 
         computed_tag_val ^= tag_mask
         computed_tag_full = computed_tag_val.to_bytes(16, 'big')
-        verify_time = time.perf_counter() - verify_start
         self._perf_data['aes_operations'] += 1
 
         # NIST SP 800-38D: MSB truncation for tag verification
@@ -178,9 +201,7 @@ class AES_GCM:
         if not hmac.compare_digest(msb_trunc, received_tag):
             raise InvalidTagException()
 
-        decrypt_start = time.perf_counter()
-        plaintext = self._gctr(self._inc32(j0), ciphertext)
-        decrypt_time = time.perf_counter() - decrypt_start
+        plaintext = self._gctr_optimized(self._inc32(j0), ciphertext)
         self._perf_data['aes_operations'] += 1
 
         total_time = time.perf_counter() - start_time
@@ -197,6 +218,27 @@ class AES_GCM:
     def _build_counter(self, nonce: bytes) -> bytes:
         J0 = self._derive_J0(nonce) 
         return self._inc32(J0)
+
+    def _gctr_optimized(self, icb: bytes, data: bytes) -> bytes:
+        if len(icb) != 16:
+            raise InvalidInputException('ICB must be 16 bytes.')
+        if not data:
+            return b''
+        
+        out = bytearray(len(data))
+        
+        for i in range(0, len(data), 16):
+            chunk_size = min(16, len(data) - i)
+            
+            encryptor = self._aes_ecb_cipher.encryptor()
+            keystream = encryptor.update(icb) + encryptor.finalize()
+            
+            for j in range(chunk_size):
+                out[i + j] = data[i + j] ^ keystream[j]
+            
+            icb = self._inc32(icb)
+        
+        return bytes(out)
 
     def _gctr(self, icb: bytes, data: bytes) -> bytes:
         if len(icb) != 16:
@@ -215,7 +257,7 @@ class AES_GCM:
             out[i] = data[i] ^ keystream[i]
         return bytes(out)
 
-    def _inc32(self, block16: bytes) -> bytes:
+    def _inc32(self, block16: bytes) -> int:
         if len(block16) != 16:
             raise InvalidInputException('Counter block must be 16 bytes.')
         prefix = block16[:12]
@@ -230,7 +272,6 @@ class AES_GCM:
             return iv + b'\x00\x00\x00\x01'
         else:
             if len(iv) < 16:
-                # Legacy method for short IVs (test vector compatibility)
                 iv_len_bits = len(iv) * 8
                 s = (16 - (len(iv) % 16)) % 16
                 ghash_input = iv + (b'\x00' * s) + struct.pack('>Q', iv_len_bits)
@@ -258,7 +299,7 @@ class AES_GCM:
         J0 = self._derive_J0(nonce)
         info['J0'] = J0.hex()
 
-        ct = self._gctr(self._inc32(J0), plaintext)
+        ct = self._gctr_optimized(self._inc32(J0), plaintext)
         info['Ciphertext'] = ct.hex()
 
         g = self._ghash_fast_with_table(associated_data, ct)
