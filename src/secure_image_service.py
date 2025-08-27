@@ -24,8 +24,10 @@ class SecureImageService:
         else:
             message = f"{step_name}: {elapsed:.3f}s"
         
-        logging.info(message)
-        print(f"  {message}")
+        # Only log if operation takes more than 100ms to reduce overhead
+        if elapsed > 0.1:
+            logging.info(message)
+            print(f"  {message}")
     
     def render_ttl_image_secure(self, ttl_path: str, max_display_time: int = 30) -> Optional[bytes]:
         session_id = f"render_{hash(ttl_path)}_{int(time.time())}"
@@ -198,7 +200,7 @@ class SecureImageService:
             key_hdr = derive_subkey(salt, b"ImAged HDR")
             aes_hdr = AES_GCM(key_hdr)
             try:
-                aes_hdr.decrypt(nonce_hdr, cand_taghdr, cand_header)
+                aes_hdr.decrypt(nonce_hdr, b"" + cand_taghdr, cand_header)
             except Exception:
                 raise ValueError("Invalid TTL format")
             self._log_timing("Verify header auth", step_start)
