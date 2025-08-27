@@ -352,4 +352,5 @@ def main():
 if __name__ == '__main__':
     main()
 
+# To Run: python -m src.test_vectors_runner --dir ./testVectors --impl custom
 
