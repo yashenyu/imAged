@@ -76,7 +76,7 @@ def _infer_mode_from_filename(filename: str) -> str:
     return 'decrypt'
 
 
-def _run_vector(mode: str, header: Dict[str, str], vector: Dict[str, str], impl: str = 'custom') -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
+def _run_vector(mode: str, header: Dict[str, str], vector: Dict[str, str], impl: str = 'custom', cipher: Optional[AES_GCM] = None) -> Tuple[bool, Optional[str], Optional[Dict[str, str]]]:
     """
     Execute single vector. Returns (passed, error_message_if_any)
     """
@@ -133,11 +133,13 @@ def _run_vector(mode: str, header: Dict[str, str], vector: Dict[str, str], impl:
 
     if impl == 'custom':
         try:
-            cipher = AES_GCM(key)
-            cipher.set_enforce_iv_uniqueness(False)
-            
-            if 'IVlen' in header:
-                cipher._expected_iv_len = int(header['IVlen'])
+            # REUSE existing cipher if provided, otherwise create new one
+            if cipher is None:
+                cipher = AES_GCM(key)
+                cipher.set_enforce_iv_uniqueness(False)
+                
+                if 'IVlen' in header:
+                    cipher._expected_iv_len = int(header['IVlen'])
             
         except InvalidInputException as ex:
             return False, f"Invalid key: {ex}", None
@@ -232,6 +234,19 @@ def run_rsp_file(path: str, live: bool = True, limit: Optional[int] = None, impl
     num_vectors = len(vectors)
     max_count_width = len(str(num_vectors)) if num_vectors > 0 else 1
 
+    # CREATE SINGLE CIPHER INSTANCE FOR ALL VECTORS
+    cipher = None
+    if impl == 'custom' and vectors:
+        # Get key from first vector to create cipher once
+        first_key = _hex_to_bytes(vectors[0].get('Key', ''))
+        if first_key:
+            cipher = AES_GCM(first_key)
+            cipher.set_enforce_iv_uniqueness(False)
+            if 'IVlen' in header:
+                cipher._expected_iv_len = int(header['IVlen'])
+
+    # For each test vector:
+    cipher_cache: Dict[str, AES_GCM] = {}
     for idx, vec in enumerate(vectors):
         if limit is not None and total >= limit:
             break
@@ -240,7 +255,20 @@ def run_rsp_file(path: str, live: bool = True, limit: Optional[int] = None, impl
         if live:
             prefix = f"[{idx + 1:{max_count_width}d}/{num_vectors}] {filename} Count={cnt} ... "
             print(prefix, end='', flush=True)
-        ok, err, dbg = _run_vector(mode, header, vec, impl=impl)
+        
+        # PASS THE REUSED CIPHER INSTANCE
+        key_hex = vec.get('Key', '')
+        if key_hex not in cipher_cache:
+            # Create NEW cipher with THIS key
+            key_bytes = _hex_to_bytes(key_hex)
+            cipher = AES_GCM(key_bytes)  # ← Different key = different cipher!
+            cipher_cache[key_hex] = cipher
+        else:
+            # Reuse existing cipher with SAME key
+            cipher = cipher_cache[key_hex]
+        
+        ok, err, dbg = _run_vector(mode, header, vec, impl=impl, cipher=cipher)
+        
         if ok:
             passed += 1
             if live:
@@ -296,7 +324,7 @@ def main():
     parser.add_argument('--interactive', action='store_true', help='Interactive mode: choose one .rsp to run')
     parser.add_argument('--no-live', action='store_true', help='Disable per-test live output')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of vectors per file')
-    parser.add_argument('--impl', choices=['custom', 'crypto'], default='custom', help='Implementation to test: custom or cryptography backend')
+    parser.add_argument('--impl', choices=['custom', 'crypto', 'hybrid'], default='custom', help='Implementation to test: custom (V1), crypto (backend), or hybrid (V1+V2)')
     args = parser.parse_args()
 
     live = not args.no_live

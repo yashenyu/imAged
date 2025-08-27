@@ -47,12 +47,11 @@ class AES_GCM:
         )
         self._auth_key = self._compute_auth_key()
         
-        # Lazy table computation - only build when needed
-        self._pre_table = None
-        self._table_built = False
+        self._ghash_tables = self._precompute_ghash_tables()
         
         init_time = time.perf_counter() - start_time
         self._perf_data['init_time'] = init_time
+        
 
     def _compute_auth_key(self) -> int:
         # NIST SP 800-38D: H = E(K, 0^128)
@@ -63,44 +62,21 @@ class AES_GCM:
         self._perf_data['auth_key_time'] = time.perf_counter() - start
         return result
 
-    def _ensure_table_built(self):
-        """Lazily build the GHASH table only when needed"""
-        if not self._table_built:
-            H = self._auth_key
-            table = []
-            for i in range(16):
-                row = []
-                shift = 8 * i
-                for b in range(256):
-                    row.append(self._gf_2_128_mul_fast(H, b << shift))
-                table.append(tuple(row))
-            self._pre_table = tuple(table)
-            self._table_built = True
-
-    def _precompute_ghash_table(self):
-        # V2's optimized table precomputation for fast GHASH
-        self._ensure_table_built()
-        return self._pre_table
-
-    def _mul_H(self, x: int) -> int:
-        # V2's optimized multiplication using precomputed table
-        acc = 0
-        for i in range(16):
-            byte = (x >> (8 * i)) & 0xFF
-            acc ^= self._pre_table[i][byte]
-        return acc
-
-    @staticmethod
-    def _gf_2_128_mul(x: int, y: int) -> int:
-        # V2's optimized GF(2^128) multiplication
-        res = 0
-        for i in range(127, -1, -1):
-            res ^= x * ((y >> i) & 1)
-            x = (x >> 1) ^ ((x & 1) * 0xE1000000000000000000000000000000)
-        return res
+    def _precompute_ghash_tables(self) -> dict:
+        tables = {}
+        H = self._auth_key
+        
+        tables[2] = self._gf_2_128_mul_fast(H, H)
+        tables[4] = self._gf_2_128_mul_fast(tables[2], tables[2])
+        tables[8] = self._gf_2_128_mul_fast(tables[4], tables[4])
+        tables[16] = self._gf_2_128_mul_fast(tables[8], tables[8])
+        tables[32] = self._gf_2_128_mul_fast(tables[16], tables[16])
+        tables[64] = self._gf_2_128_mul_fast(tables[32], tables[32])
+        tables[128] = self._gf_2_128_mul_fast(tables[64], tables[64])
+        
+        return tables
 
     def _gf_2_128_mul_fast(self, x: int, y: int) -> int:
-        # V1's fast multiplication - better for small operations
         # NIST SP 800-38D Algorithm 1: MSB-first bit processing
         # R = 11100001 || 0^120 = 0xE1 followed by 15 zero bytes
         R = 0xE1000000000000000000000000000000
@@ -122,73 +98,38 @@ class AES_GCM:
         
         return Z & 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
-    def _ghash_optimized(self, aad: bytes, ciphertext: bytes) -> int:
-        # Smart GHASH: use simple approach for small data, optimized for large data
-        total_len = len(aad) + len(ciphertext)
+    def _gf_2_128_mul_optimized(self, x: int, y: int) -> int:
+        if y == self._auth_key:
+            for power, value in self._ghash_tables.items():
+                if x == value:
+                    return self._ghash_tables.get(power * 2, self._gf_2_128_mul_fast(x, y))
         
-        # For small data (< 1KB), use simple multiplication to avoid table overhead
-        if total_len < 1024:
-            return self._ghash_simple(aad, ciphertext)
+        return self._gf_2_128_mul_fast(x, y)
+
+    def _ghash_fast_with_table(self, aad: bytes, ciphertext: bytes) -> int:
+        # NIST SP 800-38D: GHASH_H(A || 0^v || C || 0^u || [len(A)]_64 || [len(C)]_64)
+        aad_len = len(aad)
+        ct_len = len(ciphertext)
         
-        # For larger data, use optimized table-based approach
-        self._ensure_table_built()
-        return self._ghash_table_based(aad, ciphertext)
-
-    def _ghash_simple(self, aad: bytes, ciphertext: bytes) -> int:
-        """Simple GHASH implementation for small data"""
-        tag = 0
-        aad_len = len(aad)
-        c_len = len(ciphertext)
-
-        # Process AAD in 16-byte blocks
-        full = (aad_len // 16) * 16
-        for i in range(0, full, 16):
-            tag = self._gf_2_128_mul_fast(tag ^ int.from_bytes(aad[i:i+16], 'big'), self._auth_key)
-        if aad_len != full:
-            last = aad[full:] + b'\x00' * (16 - (aad_len - full))
-            tag = self._gf_2_128_mul_fast(tag ^ int.from_bytes(last, 'big'), self._auth_key)
-
-        # Process ciphertext in 16-byte blocks
-        full = (c_len // 16) * 16
-        for i in range(0, full, 16):
-            tag = self._gf_2_128_mul_fast(tag ^ int.from_bytes(ciphertext[i:i+16], 'big'), self._auth_key)
-        if c_len != full:
-            last = ciphertext[full:] + b'\x00' * (16 - (c_len - full))
-            tag = self._gf_2_128_mul_fast(tag ^ int.from_bytes(last, 'big'), self._auth_key)
-
-        # Add length block
-        len_block = ((aad_len * 8) << 64) | (c_len * 8)
-        return self._gf_2_128_mul_fast(tag ^ len_block, self._auth_key)
-
-    def _ghash_table_based(self, aad: bytes, ciphertext: bytes) -> int:
-        """Table-based GHASH implementation for large data"""
-        tag = 0
-        aad_len = len(aad)
-        c_len = len(ciphertext)
-
-        # Process AAD in 16-byte blocks using table-based multiplication
-        full = (aad_len // 16) * 16
-        for i in range(0, full, 16):
-            tag = self._mul_H(tag ^ int.from_bytes(aad[i:i+16], 'big'))
-        if aad_len != full:
-            last = aad[full:] + b'\x00' * (16 - (aad_len - full))
-            tag = self._mul_H(tag ^ int.from_bytes(last, 'big'))
-
-        # Process ciphertext in 16-byte blocks using table-based multiplication
-        full = (c_len // 16) * 16
-        for i in range(0, full, 16):
-            tag = self._mul_H(tag ^ int.from_bytes(ciphertext[i:i+16], 'big'))
-        if c_len != full:
-            last = ciphertext[full:] + b'\x00' * (16 - (c_len - full))
-            tag = self._mul_H(tag ^ int.from_bytes(last, 'big'))
-
-        # Add length block
-        len_block = ((aad_len * 8) << 64) | (c_len * 8)
-        return self._mul_H(tag ^ len_block)
-
-    def _ghash(self, aad: bytes, ciphertext: bytes) -> int:
-        # Use the optimized implementation
-        return self._ghash_optimized(aad, ciphertext)
+        v = (16 - (aad_len % 16)) % 16
+        u = (16 - (ct_len % 16)) % 16
+        
+        ghash_input = aad + (b'\x00' * v) + ciphertext + (b'\x00' * u)
+        len_block = struct.pack('>QQ', aad_len * 8, ct_len * 8)
+        ghash_input += len_block
+        
+        hash_val = 0
+        blocks = []
+        
+        for i in range(0, len(ghash_input), 16):
+            block = int.from_bytes(ghash_input[i:i+16], 'big')
+            blocks.append(block)
+        
+        for block in blocks:
+            hash_val = self._gf_2_128_mul_optimized(hash_val ^ block, self._auth_key)
+            self._perf_data['ghash_operations'] += 1
+        
+        return hash_val
 
     def encrypt(self, nonce: bytes, plaintext: bytes, associated_data: bytes = b'', tag_len_bytes: int = 16) -> bytes:
         start_time = time.perf_counter()
@@ -198,7 +139,6 @@ class AES_GCM:
         if tag_len_bytes not in (16, 15, 14, 13, 12, 8, 4):
             raise InvalidInputException('tag_len_bytes must be one of {16,15,14,13,12,8,4}.')
 
-        # V1's IV uniqueness enforcement
         if self._enforce_iv_uniqueness:
             if nonce in self._seen_nonces:
                 raise InvalidInputException('IV/nonce reuse detected for this key. Each IV must be unique.')
@@ -213,24 +153,14 @@ class AES_GCM:
             if self._invocations_non96 >= 2**32:
                 raise InvalidInputException('Invocation limit exceeded for non-96-bit IVs with this key.')
 
-        # V1's J0 derivation (handles both 96-bit and arbitrary-length IVs)
         j0 = self._derive_J0(nonce)
         
-        # Use cryptography library for CTR mode (heavy AES operations)
-        cipher = Cipher(
-            algorithms.AES(self._key),
-            modes.CTR(self._inc32(j0)),
-            backend=self._backend
-        )
-        encryptor = cipher.encryptor()
-        ciphertext = encryptor.update(plaintext) + encryptor.finalize()
+        ciphertext = self._gctr_optimized(self._inc32(j0), plaintext)
         self._perf_data['aes_operations'] += 1
 
-        # Our own optimized GHASH implementation
-        tag = self._ghash_optimized(associated_data, ciphertext)
+        tag = self._ghash_fast_with_table(associated_data, ciphertext)
         
         # NIST SP 800-38D: T = GHASH ⊕ E_K(J0)
-        # Use cryptography library for single AES block encryption
         encryptor = self._aes_ecb_cipher.encryptor()
         tag_mask = int.from_bytes(encryptor.update(j0) + encryptor.finalize(), 'big')
         tag ^= tag_mask
@@ -239,11 +169,8 @@ class AES_GCM:
         total_time = time.perf_counter() - start_time
         self._perf_data['total_encrypt'] += total_time
         
-        # V1's tag truncation support
         full_tag = tag.to_bytes(16, 'big')
         return ciphertext + full_tag[:tag_len_bytes]
-
-
 
     def decrypt(self, nonce: bytes, data: bytes, associated_data: bytes = b'', tag_len_bytes: int = 16) -> bytes:
         start_time = time.perf_counter()
@@ -257,34 +184,24 @@ class AES_GCM:
 
         ciphertext = data[:-tag_len_bytes]
         received_tag = data[-tag_len_bytes:]
-        
-        # V1's J0 derivation
         j0 = self._derive_J0(nonce)
 
-        # Our own optimized GHASH implementation
-        computed_tag_val = self._ghash_optimized(associated_data, ciphertext)
+        computed_tag_val = self._ghash_fast_with_table(associated_data, ciphertext)
         
         # NIST SP 800-38D: T = GHASH ⊕ E_K(J0)
-        # Use cryptography library for single AES block encryption
         encryptor = self._aes_ecb_cipher.encryptor()
         tag_mask = int.from_bytes(encryptor.update(j0) + encryptor.finalize(), 'big')
+
         computed_tag_val ^= tag_mask
         computed_tag_full = computed_tag_val.to_bytes(16, 'big')
         self._perf_data['aes_operations'] += 1
 
-        # V1's tag verification with truncation
+        # NIST SP 800-38D: MSB truncation for tag verification
         msb_trunc = computed_tag_full[:tag_len_bytes]
         if not hmac.compare_digest(msb_trunc, received_tag):
             raise InvalidTagException()
 
-        # Use cryptography library for CTR mode (heavy AES operations)
-        cipher = Cipher(
-            algorithms.AES(self._key),
-            modes.CTR(self._inc32(j0)),
-            backend=self._backend
-        )
-        decryptor = cipher.decryptor()
-        plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+        plaintext = self._gctr_optimized(self._inc32(j0), ciphertext)
         self._perf_data['aes_operations'] += 1
 
         total_time = time.perf_counter() - start_time
@@ -292,16 +209,55 @@ class AES_GCM:
         
         return plaintext
 
-
-
     def set_enforce_iv_uniqueness(self, enforce: bool) -> None:
         self._enforce_iv_uniqueness = bool(enforce)
 
     def reset_iv_registry(self) -> None:
         self._seen_nonces.clear()
 
-    def _inc32(self, block16: bytes) -> bytes:
-        # V1's counter increment (preserves correctness)
+    def _build_counter(self, nonce: bytes) -> bytes:
+        J0 = self._derive_J0(nonce) 
+        return self._inc32(J0)
+
+    def _gctr_optimized(self, icb: bytes, data: bytes) -> bytes:
+        if len(icb) != 16:
+            raise InvalidInputException('ICB must be 16 bytes.')
+        if not data:
+            return b''
+        
+        out = bytearray(len(data))
+        
+        for i in range(0, len(data), 16):
+            chunk_size = min(16, len(data) - i)
+            
+            encryptor = self._aes_ecb_cipher.encryptor()
+            keystream = encryptor.update(icb) + encryptor.finalize()
+            
+            for j in range(chunk_size):
+                out[i + j] = data[i + j] ^ keystream[j]
+            
+            icb = self._inc32(icb)
+        
+        return bytes(out)
+
+    def _gctr(self, icb: bytes, data: bytes) -> bytes:
+        if len(icb) != 16:
+            raise InvalidInputException('ICB must be 16 bytes.')
+        if not data:
+            return b''
+        blocks = []
+        counter = icb
+        for _ in range((len(data) + 15) // 16):
+            blocks.append(counter)
+            counter = self._inc32(counter)
+        encryptor = self._aes_ecb_cipher.encryptor()
+        keystream = encryptor.update(b''.join(blocks)) + encryptor.finalize()
+        out = bytearray(len(data))
+        for i in range(len(data)):
+            out[i] = data[i] ^ keystream[i]
+        return bytes(out)
+
+    def _inc32(self, block16: bytes) -> int:
         if len(block16) != 16:
             raise InvalidInputException('Counter block must be 16 bytes.')
         prefix = block16[:12]
@@ -310,7 +266,7 @@ class AES_GCM:
         return prefix + ctr.to_bytes(4, 'big')
 
     def _derive_J0(self, iv: bytes) -> bytes:
-        # V1's J0 derivation (handles both 96-bit and arbitrary-length IVs correctly)
+        # NIST SP 800-38D Step 2: J0 derivation
         if len(iv) == 12:
             # 96-bit IV: J0 = IV || 0^31 || 1
             return iv + b'\x00\x00\x00\x01'
@@ -327,7 +283,6 @@ class AES_GCM:
                 s_bytes = s_bits // 8
                 ghash_input = iv + (b'\x00' * s_bytes) + struct.pack('>Q', iv_len_bits)
             
-            # Use optimized GHASH for J0 computation
             hash_val = 0
             for i in range(0, len(ghash_input), 16):
                 block = int.from_bytes(ghash_input[i:i+16], 'big')
@@ -335,7 +290,6 @@ class AES_GCM:
             return hash_val.to_bytes(16, 'big')
 
     def debug_vector(self, nonce: bytes, plaintext: bytes, associated_data: bytes = b'', tag_len_bytes: int = 16) -> dict:
-        # V1's debug function (preserved for validation)
         if tag_len_bytes not in (16, 15, 14, 13, 12, 8, 4):
             raise InvalidInputException("tag_len_bytes must be one of {16,15,14,13,12,8,4}.")
 
@@ -345,18 +299,10 @@ class AES_GCM:
         J0 = self._derive_J0(nonce)
         info['J0'] = J0.hex()
 
-        # Use V2's bulk CTR for ciphertext generation
-        cipher = Cipher(
-            algorithms.AES(self._key),
-            modes.CTR(self._inc32(J0)),
-            backend=self._backend
-        )
-        encryptor = cipher.encryptor()
-        ct = encryptor.update(plaintext) + encryptor.finalize()
+        ct = self._gctr_optimized(self._inc32(J0), plaintext)
         info['Ciphertext'] = ct.hex()
 
-        # Use V2's optimized GHASH
-        g = self._ghash(associated_data, ct)
+        g = self._ghash_fast_with_table(associated_data, ct)
         info['GHASH'] = g.to_bytes(16, 'big').hex()
 
         enc = self._aes_ecb_cipher.encryptor()
